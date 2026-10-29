@@ -1,9 +1,13 @@
-name: nightly
+name: build-extension
 
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -11,6 +15,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -19,51 +25,28 @@ jobs:
           java-version: 17
           cache: 'gradle'
 
-      - name: Cook Variables from gradle.properties
-        run : |
-          name=$(grep '^extName=' gradle.properties | cut -d'=' -f2)
-          echo "NAME=$name Extension" >> $GITHUB_ENV
-          id=$(grep '^extId=' gradle.properties | cut -d'=' -f2)
-          echo "TAG=$id" >> $GITHUB_ENV
-
-      - name: Make Environment
+      - name: Build Debug EAPK
         run: |
-          version=$( echo ${{ github.event.head_commit.id }} | cut -c1-7 )
-          echo "VERSION=v$version" >> $GITHUB_ENV
-          echo -e "## ${{ env.NAME }}\n${{ github.event.head_commit.message }}" > commit.txt
-          echo "APP_PATH=app/build/${{ env.TAG }}-$version.eapk" >> $GITHUB_ENV
-          echo "${{ secrets.KEYSTORE_B64 }}" | base64 -d > $GITHUB_WORKSPACE/signing-key.jks
           chmod +x ./gradlew
+          ./gradlew :app:assembleDebug
 
-      - name: Build with Gradle
+      - name: Package EAPK
         run: |
-          ./gradlew assembleDebug \
-          -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/signing-key.jks \
-          -Pandroid.injected.signing.store.password=${{ secrets.PASSWORD }} \
-          -Pandroid.injected.signing.key.alias=key0 \
-          -Pandroid.injected.signing.key.password=${{ secrets.PASSWORD }}
-          
-          cp app/build/outputs/apk/debug/app-debug.apk ${{ env.APP_PATH }}
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/quranrecite_music.eapk
 
-      - name: Upload APK
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          path: ${{ env.APP_PATH }}
+          name: quranrecite_music-eapk
+          path: dist/quranrecite_music.eapk
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          make_latest: true
-          tag_name: ${{ env.VERSION }}
-          body_path: commit.txt
-          name: ${{ env.VERSION }}
-          files: ${{ env.APP_PATH }}
-
-      - name: Delete Old Releases
-        uses: sgpublic/delete-release-action@master
-        with:
-          release-drop: true
-          release-keep-count: 2
-          release-drop-tag: true
+          tag_name: latest
+          name: "QuranRecite Music Extension"
+          body: "Direct YouTube Music & Lossless Audio Proxy for Echo."
+          files: dist/quranrecite_music.eapk
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
