@@ -10,9 +10,9 @@ import dev.brahmkshatriya.echo.common.models.Streamable.Media.Companion.toServer
 import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toImageHolder
 import dev.brahmkshatriya.echo.common.settings.Setting
 import dev.brahmkshatriya.echo.common.settings.Settings
+import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
 import java.net.URLEncoder
 
 class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
@@ -20,6 +20,7 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
     private lateinit var settings: Settings
     private val httpClient = OkHttpClient.Builder().build()
     private val baseUrl = "https://music.quranrecite.sbs"
+    private val json = Json { ignoreUnknownKeys = true }
 
     override fun setSettings(settings: Settings) {
         this.settings = settings
@@ -40,17 +41,17 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: ""
-                    val json = JSONObject(body)
-                    val tracksArray = json.optJSONArray("tracks")
+                    val root = json.parseToJsonElement(body).jsonObject
+                    val tracksArray = root["tracks"]?.jsonArray
                     if (tracksArray != null) {
-                        for (i in 0 until tracksArray.length()) {
-                            val item = tracksArray.getJSONObject(i)
-                            val id = item.optString("id").replace("yt_", "")
-                            val title = item.optString("title", "Unknown")
-                            val artist = item.optString("artist", "Unknown")
-                            val album = item.optString("album", "")
-                            val art = item.optString("artworkURL", "")
-                            val durationSeconds = item.optLong("duration", 0)
+                        for (element in tracksArray) {
+                            val item = element.jsonObject
+                            val id = item["id"]?.jsonPrimitive?.contentOrNull?.replace("yt_", "") ?: continue
+                            val title = item["title"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
+                            val artist = item["artist"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
+                            val album = item["album"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val art = item["artworkURL"]?.jsonPrimitive?.contentOrNull ?: ""
+                            val durationSeconds = item["duration"]?.jsonPrimitive?.longOrNull ?: 0L
 
                             val track = Track(
                                 id = id,
@@ -80,7 +81,7 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
             listOf(Tab("Tracks", "Tracks"))
         ) { _ ->
             PagedData.Single {
-                listOf(Shelf.Lists.Tracks(tracks))
+                listOf(Shelf.Lists.Tracks(id = "tracks", title = "Tracks", list = tracks) as Shelf)
             }.toFeedData()
         }
     }
@@ -98,5 +99,9 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
             headers = mapOf("User-Agent" to "EchoPlayer/1.0"),
             type = Streamable.SourceType.Progressive
         )
+    }
+
+    override suspend fun loadFeed(track: Track): Feed<Shelf>? {
+        return null
     }
 }

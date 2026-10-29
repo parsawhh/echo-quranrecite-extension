@@ -9,6 +9,7 @@ plugins {
 dependencies {
     compileOnly(libs.echo.common)
     compileOnly(libs.kotlin.stdlib)
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)
@@ -23,8 +24,6 @@ java {
 kotlin {
     jvmToolchain(17)
 }
-
-// Extension properties goto `gradle.properties` to set values
 
 val extType: String by project
 val extId: String by project
