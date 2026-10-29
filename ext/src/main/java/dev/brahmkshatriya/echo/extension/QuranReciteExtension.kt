@@ -69,6 +69,12 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
             val art = extractJsonField(block, "artworkURL") ?: ""
             val durationSec = extractJsonLong(block, "duration") ?: 0L
 
+            val serverStream = Streamable.server(
+                id = cleanId,
+                quality = 256,
+                title = "High (256k AAC)"
+            )
+
             val track = Track(
                 id = cleanId,
                 title = title,
@@ -76,13 +82,7 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
                 album = if (album.isNotEmpty()) Album(id = "album_$cleanId", title = album) else null,
                 duration = durationSec * 1000L,
                 cover = art.toImageHolder(),
-                streamables = listOf(
-                    Streamable.server(
-                        id = cleanId,
-                        quality = 256,
-                        title = "High (256k AAC)"
-                    )
-                )
+                streamables = listOf(serverStream)
             )
             outTracks.add(track)
         }
@@ -119,14 +119,27 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
     }
 
     override suspend fun loadTrack(track: Track, isDownload: Boolean): Track {
-        return track
+        val cleanId = track.id.replace("yt_", "")
+        val streamList = if (track.streamables.isNotEmpty()) {
+            track.streamables
+        } else {
+            listOf(
+                Streamable.server(
+                    id = cleanId,
+                    quality = 256,
+                    title = "High (256k AAC)"
+                )
+            )
+        }
+        return track.copy(streamables = streamList)
     }
 
     override suspend fun loadStreamableMedia(
         streamable: Streamable,
         isDownload: Boolean
     ): Streamable.Media {
-        val streamUrl = "$baseUrl/audio/${streamable.id}"
+        val cleanId = streamable.id.replace("yt_", "")
+        val streamUrl = "$baseUrl/audio/$cleanId"
         return streamUrl.toServerMedia(
             headers = mapOf("User-Agent" to "EchoPlayer/1.0"),
             type = Streamable.SourceType.Progressive
