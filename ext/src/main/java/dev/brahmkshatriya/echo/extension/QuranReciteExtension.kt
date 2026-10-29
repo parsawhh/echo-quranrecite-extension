@@ -10,17 +10,16 @@ import dev.brahmkshatriya.echo.common.models.Streamable.Media.Companion.toServer
 import dev.brahmkshatriya.echo.common.models.ImageHolder.Companion.toImageHolder
 import dev.brahmkshatriya.echo.common.settings.Setting
 import dev.brahmkshatriya.echo.common.settings.Settings
-import kotlinx.serialization.json.*
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.URLEncoder
+import java.util.regex.Pattern
 
 class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
 
     private lateinit var settings: Settings
     private val httpClient = OkHttpClient.Builder().build()
     private val baseUrl = "https://music.quranrecite.sbs"
-    private val json = Json { ignoreUnknownKeys = true }
 
     override fun setSettings(settings: Settings) {
         this.settings = settings
@@ -31,7 +30,8 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
     override suspend fun onInitialize() {}
 
     override suspend fun loadSearchFeed(query: String): Feed<Shelf> {
-        val encodedQuery = URLEncoder.encode(query.ifBlank { "top hits" }, "UTF-8")
+        val cleanQuery = if (query.trim().isEmpty()) "top hits" else query
+        val encodedQuery = URLEncoder.encode(cleanQuery, "UTF-8")
         val searchUrl = "$baseUrl/search?q=$encodedQuery&quality=high"
 
         val request = Request.Builder().url(searchUrl).build()
@@ -41,39 +41,10 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
             httpClient.newCall(request).execute().use { response ->
                 if (response.isSuccessful) {
                     val body = response.body?.string() ?: ""
-                    val root = json.parseToJsonElement(body).jsonObject
-                    val tracksArray = root["tracks"]?.jsonArray
-                    if (tracksArray != null) {
-                        for (element in tracksArray) {
-                            val item = element.jsonObject
-                            val id = item["id"]?.jsonPrimitive?.contentOrNull?.replace("yt_", "") ?: continue
-                            val title = item["title"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
-                            val artist = item["artist"]?.jsonPrimitive?.contentOrNull ?: "Unknown"
-                            val album = item["album"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val art = item["artworkURL"]?.jsonPrimitive?.contentOrNull ?: ""
-                            val durationSeconds = item["duration"]?.jsonPrimitive?.longOrNull ?: 0L
-
-                            val track = Track(
-                                id = id,
-                                title = title,
-                                artists = listOf(Artist(id = "artist_$id", name = artist)),
-                                album = if (album.isNotEmpty()) Album(id = "album_$id", title = album) else null,
-                                duration = durationSeconds * 1000L,
-                                cover = art.toImageHolder(),
-                                streamables = listOf(
-                                    Streamable.server(
-                                        id = id,
-                                        quality = 256,
-                                        title = "High (256k AAC)"
-                                    )
-                                )
-                            )
-                            tracks.add(track)
-                        }
-                    }
+                    parseTracksManually(body, tracks)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
         }
 
@@ -84,6 +55,67 @@ class QuranReciteExtension : ExtensionClient, SearchFeedClient, TrackClient {
                 listOf(Shelf.Lists.Tracks(id = "tracks", title = "Tracks", list = tracks) as Shelf)
             }.toFeedData()
         }
+    }
+
+    private fun parseTracksManually(body: String, outTracks: MutableList<Track>) {
+        val trackBlocks = body.split("{\"id\":")
+        for (i in 1 until trackBlocks.size) {
+            val block = trackBlocks[i]
+            val id = extractJsonString(block, "\"id\":") ?: extractFirstString(block) ?: continue
+            val cleanId = id.replace("yt_", "")
+            val title = extractJsonField(block, "title") ?: "Unknown"
+            val artist = extractJsonField(block, "artist") ?: "Unknown"
+            val album = extractJsonField(block, "album") ?: ""
+            val art = extractJsonField(block, "artworkURL") ?: ""
+            val durationSec = extractJsonLong(block, "duration") ?: 0L
+
+            val track = Track(
+                id = cleanId,
+                title = title,
+                artists = listOf(Artist(id = "artist_$cleanId", name = artist)),
+                album = if (album.isNotEmpty()) Album(id = "album_$cleanId", title = album) else null,
+                duration = durationSec * 1000L,
+                cover = art.toImageHolder(),
+                streamables = listOf(
+                    Streamable.server(
+                        id = cleanId,
+                        quality = 256,
+                        title = "High (256k AAC)"
+                    )
+                )
+            )
+            outTracks.add(track)
+        }
+    }
+
+    private fun extractFirstString(block: String): String? {
+        val start = block.indexOf('"')
+        if (start == -1) return null
+        val end = block.indexOf('"', start + 1)
+        if (end == -1) return null
+        return block.substring(start + 1, end)
+    }
+
+    private fun extractJsonField(block: String, key: String): String? {
+        val pattern = "\"$key\":\\s*\"([^\"]*)\""
+        val matcher = Pattern.compile(pattern).matcher(block)
+        return if (matcher.find()) matcher.group(1) else null
+    }
+
+    private fun extractJsonString(block: String, keyWithColon: String): String? {
+        val idx = block.indexOf(keyWithColon)
+        if (idx == -1) return null
+        val sub = block.substring(idx + keyWithColon.length).trim()
+        if (!sub.startsWith("\"")) return null
+        val end = sub.indexOf('"', 1)
+        if (end == -1) return null
+        return sub.substring(1, end)
+    }
+
+    private fun extractJsonLong(block: String, key: String): Long? {
+        val pattern = "\"$key\":\\s*([0-9]+)"
+        val matcher = Pattern.compile(pattern).matcher(block)
+        return if (matcher.find()) matcher.group(1)?.toLongOrNull() else null
     }
 
     override suspend fun loadTrack(track: Track, isDownload: Boolean): Track {
